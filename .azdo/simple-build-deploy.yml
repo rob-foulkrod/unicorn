@@ -1,0 +1,138 @@
+name: yaml-$(date:yyyyMMdd)$(rev:.r)
+
+trigger:
+  branches:
+    include:
+    - refs/heads/main
+    - refs/heads/dev
+
+variables:
+- name: BuildParameters.RestoreBuildProjects
+  value: '**/*.csproj'
+
+- name: BuildParameters.TestProjects
+  value: '**/*[Tt]ests/*.csproj'
+
+- name: BuildConfiguration
+  value: 'Release'
+
+- name: serviceConnection
+  value: 'unicornAzureConnection'
+
+- name: resourceGroup
+  value: 'unicorn-rg'
+
+- name: webAppName
+  value: 'unicorn-azdo'
+
+- name: isMain
+  value: $[eq(variables['Build.SourceBranch'], 'refs/heads/main')]
+
+stages:
+  - stage: build
+    jobs:
+    - job: CI
+      displayName: CI
+      pool:
+        vmImage: ubuntu-latest
+      steps:
+      - checkout: self
+        fetchDepth: 1
+
+      - task: DotNetCoreCLI@2
+        displayName: Restore
+        inputs:
+          command: restore
+          projects: $(BuildParameters.RestoreBuildProjects)
+
+      - task: DotNetCoreCLI@2
+        displayName: Build
+        inputs:
+          projects: $(BuildParameters.RestoreBuildProjects)
+          arguments: --configuration $(BuildConfiguration)
+
+      - task: DotNetCoreCLI@2
+        displayName: "Running Tests"
+        inputs:
+          command: 'test'
+          projects: $(BuildParameters.TestProjects)
+          arguments: '--configuration $(buildConfiguration) /p:CollectCoverage=true /p:CoverletOutputFormat=cobertura'
+
+      - task: PublishCodeCoverageResults@1
+        displayName: "Publish code coverage results"
+        inputs:
+          codeCoverageTool: "Cobertura"
+          summaryFileLocation: '$(Agent.BuildDirectory)/**/coverage.cobertura.xml'
+
+    - job: Publish
+      displayName: Publish
+      dependsOn: CI
+      pool:
+        vmImage: ubuntu-latest
+      steps:
+      - checkout: self
+        fetchDepth: 1
+
+      - task: DotNetCoreCLI@2
+        displayName: Publish
+        inputs:
+          command: publish
+          publishWebProjects: True
+          projects: $(BuildParameters.RestoreBuildProjects)
+          arguments: --configuration $(BuildConfiguration) --output $(build.artifactstagingdirectory)
+          zipAfterPublish: True
+
+      - task: PublishBuildArtifacts@1
+        displayName: Publish Artifact
+        condition: succeededOrFailed()
+        inputs:
+          PathtoPublish: $(build.artifactstagingdirectory)
+          ArtifactName: "app"
+
+  - stage: deployToTest
+    jobs:
+      - deployment: DeployToTest
+        displayName: Deploy To Test Env
+        environment: UnicornTestingEnvironment
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - bash: tree
+                  displayName: Where Am I
+                  workingDirectory: $(Agent.BuildDirectory)
+
+                - task: AzureRmWebAppDeployment@4
+                  displayName: Deploy App To Test
+                  inputs:
+                    ConnectionType: "AzureRM"
+                    azureSubscription: $(serviceConnection)
+                    appType: "webAppLinux"
+                    WebAppName: $(webAppName)
+                    deployToSlotOrASE: true
+                    ResourceGroupName: $(resourceGroup)
+                    SlotName: "test"
+                    packageForLinux: "$(Agent.BuildDirectory)/app/Unicorn.Web.zip"
+
+  - stage: deployToProd
+    condition: and(succeeded(), eq(variables.isMain, 'true'))
+    dependsOn: deployToTest
+    jobs:
+      - deployment: webDeployToProd
+        displayName: Deploy To Prod Env
+        environment: UnicornProductionEnvironment
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: AzureRmWebAppDeployment@4
+                  displayName: Deploy App To Test
+                  inputs:
+                    ConnectionType: "AzureRM"
+                    azureSubscription: $(serviceConnection)
+                    appType: "webAppLinux"
+                    WebAppName: $(webAppName)
+                    deployToSlotOrASE: true
+                    ResourceGroupName: $(resourceGroup)
+                    SlotName: "Production"
+                    packageForLinux: "$(Agent.BuildDirectory)/app/Unicorn.Web.zip"
