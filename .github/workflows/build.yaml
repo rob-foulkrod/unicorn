@@ -82,5 +82,5 @@ jobs:
         uses: azure/webapps-deploy@v2
         with:
           app-name: 'unicorn-gh'
-          slot-name: 'Production'
           package: .
+          resource-group-name: 'unicorn-rg'
