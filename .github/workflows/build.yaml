@@ -42,7 +42,8 @@ jobs:
 
       - name: Build with dotnet
         run: dotnet build --configuration Release
-
+        working-directory: ./src/web/Unicorn.Web/
+        
       - name: dotnet publish
         run: dotnet publish -c Release -o ./out
         working-directory: ./src/web/Unicorn.Web/
