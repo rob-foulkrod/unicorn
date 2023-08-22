@@ -1,0 +1,82 @@
+# https://docs.microsoft.com/en-us/azure/developer/github/connect-from-azure
+# Set up 
+# In Azure 
+# Create an App Registration
+# In the App Registration, add a Credential
+# In the Credential add a Federated Credential
+# You will need:
+# - The name of the organization
+# - The Name of the Repo
+# - The location we are publishing from (ie, refs/heds/main or the production env)
+# with the following secrets
+#   AZURE_CLIENT_ID 
+#   AZURE_TENANT_ID 
+#   AZURE_SUBSCRIPTION_ID 
+
+
+name: Build and deploy
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v2
+
+      - name: Set up .NET Core
+        uses: actions/setup-dotnet@v1
+        with:
+          dotnet-version: '6.0.x'
+          include-prerelease: false
+
+      - name: Build with dotnet
+        run: dotnet build --configuration Release
+
+      - name: dotnet publish
+        run: dotnet publish -c Release -o ./out
+        working-directory: src/web/Unicorn.Web/
+
+      - name: Upload artifact for deployment job
+        uses: actions/upload-artifact@v2
+        with:
+          name: webapp
+          path: ./src/web/Unicorn.Web/out
+
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    needs: build
+    environment:
+      name: production
+      url: ${{ steps.deploy-to-webapp.outputs.webapp-url }}
+
+    steps:
+      - name: Download artifact from build job
+        uses: actions/download-artifact@v2
+        with:
+          name: webapp
+          
+      - name: Login
+        uses: azure/login@v1
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy to Azure Web App
+        id: deploy-to-webapp
+        uses: azure/webapps-deploy@v2
+        with:
+          app-name: 'unicorn-gh'
+          slot-name: 'Production'
+          package: .
